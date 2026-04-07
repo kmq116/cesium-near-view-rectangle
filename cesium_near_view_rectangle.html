@@ -1,0 +1,489 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Cesium 相机近端可视区域</title>
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Cesium.js"></script>
+    <link
+      href="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Widgets/widgets.css"
+      rel="stylesheet"
+    />
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body,
+      #cesiumContainer {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+      }
+
+      #panel {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        background: rgba(30, 30, 30, 0.88);
+        color: #eee;
+        padding: 14px 16px;
+        border-radius: 8px;
+        font-family: monospace;
+        font-size: 13px;
+        min-width: 300px;
+        max-width: 360px;
+        z-index: 999;
+        pointer-events: none;
+      }
+      #panel h3 {
+        font-size: 14px;
+        margin-bottom: 10px;
+        color: #7ecfff;
+        font-family: sans-serif;
+      }
+      #panel .row {
+        margin: 3px 0;
+      }
+      #panel .label {
+        color: #aaa;
+      }
+      #panel .val {
+        color: #fff;
+      }
+      #panel .warn {
+        color: #ffaa44;
+        font-size: 12px;
+        margin-top: 6px;
+      }
+      #panel .ok {
+        color: #66ff99;
+        font-size: 12px;
+        margin-top: 6px;
+      }
+
+      #btnPanel {
+        position: absolute;
+        bottom: 40px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 10px;
+        z-index: 999;
+      }
+      .btn {
+        padding: 9px 18px;
+        border-radius: 6px;
+        border: none;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: bold;
+        background: #1a78c2;
+        color: #fff;
+        transition: background 0.2s;
+      }
+      .btn:hover {
+        background: #2596f0;
+      }
+      .btn.red {
+        background: #b03030;
+      }
+      .btn.red:hover {
+        background: #e04040;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="cesiumContainer"></div>
+
+    <div id="panel">
+      <h3>📷 相机近端可视区域</h3>
+      <div class="row">
+        <span class="label">West : </span
+        ><span class="val" id="v-west">--</span>
+      </div>
+      <div class="row">
+        <span class="label">East : </span
+        ><span class="val" id="v-east">--</span>
+      </div>
+      <div class="row">
+        <span class="label">South : </span
+        ><span class="val" id="v-south">--</span>
+      </div>
+      <div class="row">
+        <span class="label">North : </span
+        ><span class="val" id="v-north">--</span>
+      </div>
+      <div class="row">
+        <span class="label">有效点 : </span
+        ><span class="val" id="v-hits">--</span>
+      </div>
+      <div class="row">
+        <span class="label">方法 : </span
+        ><span class="val" id="v-method">--</span>
+      </div>
+      <div id="v-msg" class="warn"></div>
+    </div>
+
+    <div id="btnPanel">
+      <button class="btn" onclick="calcAndDraw()">
+        🔍 计算并绘制近端可视区域
+      </button>
+      <button class="btn" onclick="drawComputeViewRect()">
+        📐 对比: computeViewRectangle
+      </button>
+      <button class="btn red" onclick="clearEntities()">🗑 清除</button>
+    </div>
+
+    <script>
+      // ── Token（官方 demo token，仅供测试） ──────────────────────────────────────
+      Cesium.Ion.defaultAccessToken =
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9." +
+        "eyJqdGkiOiJlYWE1OWIyYy1iZjZkLTQ3NTQtOGYzNS1hNmU2YzFlZmZhYWUiLCJpZCI6OTYyMCwic2NvcGVzIjpbImFzbCIsImFzciIsImdjIl0sImlhdCI6MTU1NDI4NzkxNX0." +
+        "euiyV3PEWBSHdMmKFNdoNZMkYxCTlFZaRWFdoFVVUgE";
+
+      // ── Viewer（不再在构造函数里传 terrainProvider） ────────────────────────────
+      const viewer = new Cesium.Viewer("cesiumContainer", {
+        animation: false,
+        timeline: false,
+        baseLayerPicker: false,
+        navigationHelpButton: false,
+        sceneModePicker: false,
+        geocoder: false,
+        homeButton: false,
+        fullscreenButton: false,
+        infoBox: false,
+        selectionIndicator: false,
+      });
+
+      // ✅ 修复1：1.107+ 用 createWorldTerrainAsync 异步加载地形
+      Cesium.createWorldTerrainAsync({
+        requestWaterMask: true,
+        requestVertexNormals: true,
+      })
+        .then(function (tp) {
+          viewer.terrainProvider = tp;
+        })
+        .catch(function (e) {
+          console.warn("地形加载失败，使用默认椭球体：", e);
+        });
+
+      const scene = viewer.scene;
+      const camera = viewer.camera;
+      const globe = scene.globe;
+      const canvas = viewer.canvas;
+
+      // 初始倾斜视角（北京，俯仰 -30°）
+      camera.setView({
+        destination: Cesium.Cartesian3.fromDegrees(116.39, 39.8, 1200000),
+        orientation: {
+          heading: Cesium.Math.toRadians(0),
+          pitch: Cesium.Math.toRadians(-30),
+          roll: 0,
+        },
+      });
+
+      // ── 工具函数 ────────────────────────────────────────────────────────────────
+
+      /**
+       * ✅ 修复2：手动射线-椭球体求交
+       * 1.107+ 中 Ellipsoid 不再直接暴露 intersectWithRay，
+       * 应使用 IntersectionTests.rayEllipsoid
+       */
+      function rayEllipsoidIntersect(ray) {
+        const ellipsoid = Cesium.Ellipsoid.WGS84;
+        const intersection = Cesium.IntersectionTests.rayEllipsoid(
+          ray,
+          ellipsoid,
+        );
+        if (!intersection) return null;
+        const t =
+          intersection.start >= 0 ? intersection.start : intersection.stop;
+        if (t < 0) return null;
+        return Cesium.Ray.getPoint(ray, t);
+      }
+
+      /**
+       * 从屏幕坐标拾取地面交点
+       * 优先 globe.pick（含地形），失败则退回椭球体求交
+       */
+      function pickGroundPoint(screenPos) {
+        const ray = camera.getPickRay(screenPos);
+        if (!ray) return null;
+
+        // 含地形
+        let cart3 = globe.pick(ray, scene);
+        if (cart3) return cart3;
+
+        // 纯椭球体 fallback
+        return rayEllipsoidIntersect(ray);
+      }
+
+      /**
+       * 生成屏幕采样点
+       * nearRatio：只采样屏幕 [nearRatio*H, H] 高度范围（下方 = 近端地面）
+       */
+      function buildSamplePoints(rows, cols, nearRatio) {
+        const W = canvas.width;
+        const H = canvas.height;
+        const yStart = Math.floor(H * nearRatio);
+        const points = [];
+
+        for (let r = 0; r <= rows; r++) {
+          const y = yStart + (H - yStart) * (r / rows);
+          for (let c = 0; c <= cols; c++) {
+            points.push(new Cesium.Cartesian2(W * (c / cols), y));
+          }
+        }
+        // 强制补四角和中心点
+        points.push(new Cesium.Cartesian2(0, 0));
+        points.push(new Cesium.Cartesian2(W, 0));
+        points.push(new Cesium.Cartesian2(0, H));
+        points.push(new Cesium.Cartesian2(W, H));
+        points.push(new Cesium.Cartesian2(W / 2, H / 2));
+        return points;
+      }
+
+      /**
+       * 核心：计算近端可视区域
+       */
+      function computeNearViewRectangle(options) {
+        options = options || {};
+        const rows = options.rows || 12;
+        const cols = options.cols || 12;
+        const nearRatio = options.nearRatio || 0.35;
+        const maxDistKm = options.maxDistKm || null;
+
+        const samplePts = buildSamplePoints(rows, cols, nearRatio);
+        const cartoList = [];
+        let hitCount = 0,
+          missCount = 0;
+
+        for (const sp of samplePts) {
+          const cart3 = pickGroundPoint(sp);
+          if (!cart3) {
+            missCount++;
+            continue;
+          }
+
+          const carto = Cesium.Ellipsoid.WGS84.cartesianToCartographic(cart3);
+          if (!carto) {
+            missCount++;
+            continue;
+          }
+
+          // 距离过滤：剔除"地平线附近"的远端点
+          if (maxDistKm !== null) {
+            const distM = Cesium.Cartesian3.distance(cart3, camera.position);
+            if (distM > maxDistKm * 1000) {
+              missCount++;
+              continue;
+            }
+          }
+
+          // 高度合理性过滤
+          if (carto.height > 15000 || carto.height < -500) {
+            missCount++;
+            continue;
+          }
+
+          cartoList.push(carto);
+          hitCount++;
+        }
+
+        if (cartoList.length < 3) return null;
+
+        const rect = Cesium.Rectangle.fromCartographicArray(cartoList);
+        return { rect, hitCount, missCount, total: samplePts.length };
+      }
+
+      // ── 绘制函数 ────────────────────────────────────────────────────────────────
+
+      function clearEntities() {
+        viewer.entities.removeAll();
+        updatePanel(null);
+      }
+
+      function drawRect(rect, color, label) {
+        if (!rect) return;
+        const border = Cesium.Color.fromCssColorString(color).withAlpha(0.85);
+        const fill = Cesium.Color.fromCssColorString(color).withAlpha(0.18);
+
+        viewer.entities.add({
+          name: label,
+          rectangle: {
+            coordinates: rect,
+            material: fill,
+            outline: true,
+            outlineColor: border,
+            outlineWidth: 2.5,
+            height: 10,
+            classificationType: Cesium.ClassificationType.TERRAIN,
+          },
+        });
+
+        // 标签放在矩形中心
+        const center = Cesium.Rectangle.center(rect);
+        viewer.entities.add({
+          position: Cesium.Cartesian3.fromRadians(
+            center.longitude,
+            center.latitude,
+            5000,
+          ),
+          label: {
+            text: label,
+            font: "14px sans-serif",
+            fillColor: Cesium.Color.WHITE,
+            outlineColor: Cesium.Color.BLACK,
+            outlineWidth: 2,
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+        });
+
+        // 四角点
+        const W = Cesium.Math.toDegrees(rect.west);
+        const E = Cesium.Math.toDegrees(rect.east);
+        const S = Cesium.Math.toDegrees(rect.south);
+        const N = Cesium.Math.toDegrees(rect.north);
+        [
+          [W, S],
+          [E, S],
+          [E, N],
+          [W, N],
+        ].forEach(([lon, lat]) => {
+          viewer.entities.add({
+            position: Cesium.Cartesian3.fromDegrees(lon, lat, 200),
+            point: {
+              pixelSize: 8,
+              color: border,
+              outlineColor: Cesium.Color.WHITE,
+              outlineWidth: 1,
+              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            },
+          });
+        });
+      }
+
+      function updatePanel(result, method) {
+        if (!result) {
+          [
+            "v-west",
+            "v-east",
+            "v-south",
+            "v-north",
+            "v-hits",
+            "v-method",
+          ].forEach((id) => {
+            document.getElementById(id).textContent = "--";
+          });
+          document.getElementById("v-msg").textContent = "";
+          return;
+        }
+        const { rect, hitCount, missCount, total } = result;
+        const toDeg = Cesium.Math.toDegrees;
+        document.getElementById("v-west").textContent =
+          toDeg(rect.west).toFixed(4) + "°";
+        document.getElementById("v-east").textContent =
+          toDeg(rect.east).toFixed(4) + "°";
+        document.getElementById("v-south").textContent =
+          toDeg(rect.south).toFixed(4) + "°";
+        document.getElementById("v-north").textContent =
+          toDeg(rect.north).toFixed(4) + "°";
+        document.getElementById("v-hits").textContent =
+          `${hitCount} / ${total}（miss: ${missCount}）`;
+        document.getElementById("v-method").textContent =
+          method || "Near-Sample Ray";
+
+        const msgEl = document.getElementById("v-msg");
+        if (missCount > total * 0.5) {
+          msgEl.className = "warn";
+          msgEl.textContent = "⚠ 超过一半射线未命中（视角可能偏向天空）";
+        } else {
+          msgEl.className = "ok";
+          msgEl.textContent = `✅ 有效采样 ${hitCount} 点，矩形已绘制`;
+        }
+      }
+
+      // ── 主功能 ──────────────────────────────────────────────────────────────────
+      function calcAndDraw() {
+        clearEntities();
+        const camHeight = Cesium.Ellipsoid.WGS84.cartesianToCartographic(
+          camera.position,
+        ).height;
+        const maxDistKm = Math.max((camHeight / 1000) * 3, 200);
+
+        const result = computeNearViewRectangle({
+          rows: 14,
+          cols: 14,
+          nearRatio: 0.3,
+          maxDistKm: maxDistKm,
+        });
+
+        if (!result) {
+          alert("未能计算出有效的近端可视区域，请调整相机角度后重试。");
+          return;
+        }
+
+        drawRect(result.rect, "#00ccff", "近端可视区域");
+        updatePanel(result, "Near-Sample Ray（近端采样）");
+        console.log("近端可视区域:", {
+          west: Cesium.Math.toDegrees(result.rect.west),
+          east: Cesium.Math.toDegrees(result.rect.east),
+          south: Cesium.Math.toDegrees(result.rect.south),
+          north: Cesium.Math.toDegrees(result.rect.north),
+        });
+      }
+
+      // ── 对比：原生 computeViewRectangle ─────────────────────────────────────────
+      function drawComputeViewRect() {
+        const rect = camera.computeViewRectangle(scene.globe.ellipsoid);
+        if (!rect) {
+          alert("computeViewRectangle 返回 undefined（视角可能朝向天空）");
+          return;
+        }
+        drawRect(rect, "#ff6600", "computeViewRectangle（原生）");
+        document.getElementById("v-method").textContent +=
+          " + computeViewRectangle（橙色）";
+        const toDeg = Cesium.Math.toDegrees;
+        console.log("computeViewRectangle:", {
+          west: toDeg(rect.west),
+          east: toDeg(rect.east),
+          south: toDeg(rect.south),
+          north: toDeg(rect.north),
+        });
+      }
+
+      // ── 点击拾取坐标 ─────────────────────────────────────────────────────────────
+      const handler = new Cesium.ScreenSpaceEventHandler(canvas);
+      handler.setInputAction(function (click) {
+        const cart3 = pickGroundPoint(click.position);
+        if (!cart3) return;
+        const carto = Cesium.Ellipsoid.WGS84.cartesianToCartographic(cart3);
+        const lon = Cesium.Math.toDegrees(carto.longitude).toFixed(5);
+        const lat = Cesium.Math.toDegrees(carto.latitude).toFixed(5);
+        viewer.entities.add({
+          position: cart3,
+          point: {
+            pixelSize: 10,
+            color: Cesium.Color.YELLOW,
+            outlineColor: Cesium.Color.BLACK,
+            outlineWidth: 1,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+          label: {
+            text: `(${lon}, ${lat})`,
+            font: "11px monospace",
+            fillColor: Cesium.Color.YELLOW,
+            outlineColor: Cesium.Color.BLACK,
+            outlineWidth: 2,
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            pixelOffset: new Cesium.Cartesian2(0, -22),
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+        });
+      }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+    </script>
+  </body>
+</html>
