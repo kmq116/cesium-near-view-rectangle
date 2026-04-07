@@ -1,6 +1,6 @@
 {
   "name": "cesium-near-view-rectangle",
-  "version": "0.01",
+  "version": "0.0.1",
   "description": "Compute the near-end visible rectangle of a Cesium camera by screen-space ray sampling. More accurate than camera.computeViewRectangle() when the view is tilted.",
   "type": "module",
   "main": "src/index.js",
