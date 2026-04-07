@@ -10,8 +10,6 @@ When the camera is tilted (e.g. pitched at −30°), the built-in `camera.comput
 npm install cesium-near-view-rectangle
 ```
 
-> **Peer dependency:** requires `cesium >= 1.100.0` installed in your project.
-
 ## Usage
 
 ```js
@@ -52,7 +50,7 @@ const result2 = computeNearViewRectangle(Cesium, viewer, {
 | `options.rows` | `number` | `12` | Number of sample rows |
 | `options.cols` | `number` | `12` | Number of sample columns |
 | `options.nearRatio` | `number` | `0.35` | Start row as a fraction of screen height (0 = top, 1 = bottom). Higher values sample closer to the camera. |
-| `options.maxDistKm` | `number \| null` | `null` | Distance filter threshold in km. Points farther than this are discarded. Use `computeAutoMaxDistKm(viewer)` for automatic tuning. |
+| `options.maxDistKm` | `number \| null` | `null` | Distance filter threshold in km. Points farther than this are discarded. Use `computeAutoMaxDistKm(Cesium, viewer)` for automatic tuning. |
 
 **Returns** `{ rect, hitCount, missCount, total } | null`
 
